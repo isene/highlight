@@ -1,0 +1,21 @@
+[package]
+name = "fe2o3-highlight"
+version = "0.1.0"
+edition = "2021"
+authors = ["Geir Isene <g@isene.com>"]
+description = "Lightweight syntax highlighter for the Fe2O3 terminal suite — source code (18 languages), email mode, HyperList, Markdown, LaTeX, plain text URLs."
+license = "Unlicense"
+repository = "https://github.com/isene/highlight"
+keywords = ["syntax", "highlighting", "terminal", "tui", "ansi"]
+categories = ["command-line-interface", "text-processing"]
+
+[lib]
+name = "highlight"
+
+[dependencies]
+crust = { version = "0.1", path = "../crust", package = "fe2o3-crust" }
+regex = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
