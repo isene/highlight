@@ -583,6 +583,12 @@ pub fn highlight(text: &str, ext: &str, max_lines: usize) -> String {
 
     let mut result = String::with_capacity(text.len() * 2);
     let mut in_block_comment = false;
+    // When a string literal hits end-of-line without closing, we carry
+    // the delimiter into the next line so the rest of the string keeps
+    // its color. Common case: Rust `"..."` literals that wrap, Python
+    // triple-quoted blocks, JS template literals, bash heredoc-like
+    // multi-line strings. None means we're not currently inside one.
+    let mut in_string: Option<char> = None;
     let mut line_count = 0;
 
     for line in text.lines() {
@@ -601,13 +607,38 @@ pub fn highlight(text: &str, ext: &str, max_lines: usize) -> String {
                     in_block_comment = false;
                     let rest = &line[pos + lang.block_end.len()..];
                     if !rest.is_empty() {
-                        highlight_line(rest, &lang, &mut result);
+                        in_string = highlight_line(rest, &lang, &mut result, in_string);
                     }
                 } else {
                     result.push_str(&style::fg(line, theme().comment));
                 }
             } else {
                 result.push_str(&style::fg(line, theme().comment));
+            }
+            continue;
+        }
+
+        // String continuation from previous line — consume up to the
+        // matching delimiter (or end-of-line if it doesn't close here),
+        // emit as string, then fall through to normal highlighting.
+        if let Some(quote) = in_string {
+            let mut end = line.len();
+            let mut i = 0;
+            let bytes = line.as_bytes();
+            while i < bytes.len() {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() { i += 2; continue; }
+                if bytes[i] == quote as u8 { end = i + 1; in_string = None; break; }
+                i += 1;
+            }
+            result.push_str(&style::fg(&line[..end], theme().string));
+            if in_string.is_some() {
+                // Whole line was string content; skip normal pass.
+                continue;
+            }
+            // Closed mid-line; remainder still needs highlighting.
+            let rest = &line[end..];
+            if !rest.is_empty() {
+                in_string = highlight_line(rest, &lang, &mut result, in_string);
             }
             continue;
         }
@@ -638,34 +669,41 @@ pub fn highlight(text: &str, ext: &str, max_lines: usize) -> String {
                 if !lang.block_end.is_empty() {
                     if let Some(end) = line[pos + lang.block_start.len()..].find(lang.block_end) {
                         // Single-line block comment
-                        highlight_line(&line[..pos], &lang, &mut result);
+                        in_string = highlight_line(&line[..pos], &lang, &mut result, in_string);
                         let comment_end = pos + lang.block_start.len() + end + lang.block_end.len();
                         result.push_str(&style::fg(&line[pos..comment_end], theme().comment));
                         let rest = &line[comment_end..];
                         if !rest.is_empty() {
-                            highlight_line(rest, &lang, &mut result);
+                            in_string = highlight_line(rest, &lang, &mut result, in_string);
                         }
                         continue;
                     }
                 }
                 // Multi-line block comment starts
-                highlight_line(&line[..pos], &lang, &mut result);
+                in_string = highlight_line(&line[..pos], &lang, &mut result, in_string);
                 result.push_str(&style::fg(&line[pos..], theme().comment));
                 in_block_comment = true;
                 continue;
             }
         }
 
-        highlight_line(line, &lang, &mut result);
+        in_string = highlight_line(line, &lang, &mut result, in_string);
     }
 
     result
 }
 
-fn highlight_line(line: &str, lang: &Lang, out: &mut String) {
+/// Returns `Some(quote_char)` if a string literal is still open at
+/// end-of-line (so the caller can carry the state into the next line);
+/// `None` if the line ended with all strings closed.
+fn highlight_line(line: &str, lang: &Lang, out: &mut String, _carry: Option<char>) -> Option<char> {
     let chars: Vec<char> = line.chars().collect();
     let len = chars.len();
     let mut i = 0;
+    // Carried-over string state is consumed BEFORE this function is
+    // called (see `highlight`); only fresh-on-this-line strings can
+    // remain open at end-of-line.
+    let mut unclosed: Option<char> = None;
 
     while i < len {
         let ch = chars[i];
@@ -675,11 +713,13 @@ fn highlight_line(line: &str, lang: &Lang, out: &mut String) {
             let quote = ch;
             let start = i;
             i += 1;
+            let mut closed = false;
             while i < len {
                 if chars[i] == '\\' && i + 1 < len {
                     i += 2; // skip escaped char
                 } else if chars[i] == quote {
                     i += 1;
+                    closed = true;
                     break;
                 } else {
                     i += 1;
@@ -687,6 +727,7 @@ fn highlight_line(line: &str, lang: &Lang, out: &mut String) {
             }
             let s: String = chars[start..i].iter().collect();
             out.push_str(&style::fg(&s, theme().string));
+            if !closed { unclosed = Some(quote); }
             continue;
         }
 
@@ -773,6 +814,7 @@ fn highlight_line(line: &str, lang: &Lang, out: &mut String) {
         out.push(ch);
         i += 1;
     }
+    unclosed
 }
 
 fn plain_with_limit(text: &str, max_lines: usize) -> String {
