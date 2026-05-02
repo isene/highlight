@@ -13,6 +13,21 @@
 //!     emit machinery → [`color_emails`]
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// xterm-256 palette index used for the curly-underline color on
+/// misspelled words. Default 196 (bright red). Mutable at runtime via
+/// [`set_miss_color`] so embedding apps (scribe, kastrup) can take the
+/// color from their own config.
+static MISS_COLOR: AtomicU8 = AtomicU8::new(196);
+
+/// Set the curly-underline color used by [`emit_email_line`] for
+/// misspelled words. xterm-256 palette index (0–255).
+pub fn set_miss_color(c: u8) { MISS_COLOR.store(c, Ordering::Relaxed); }
+
+/// Currently configured miss color (mostly for diagnostics / popup
+/// display).
+pub fn miss_color() -> u8 { MISS_COLOR.load(Ordering::Relaxed) }
 
 /// Per-line email styling. Block colors mirror kastrup's right-pane render
 /// 1-for-1 (same palette indices), so reading a message in kastrup and
@@ -160,7 +175,17 @@ pub fn emit_email_line(
         let bold = bold_until.map_or(false, |k| pos < k);
         let tok = tokens.iter().find(|t| pos >= t.start && pos < t.end);
         let miss = miss_ranges.iter().any(|(s, e)| pos >= *s && pos < *e);
-        let fg = tok.map(|t| t.fg).or(base_fg);
+        // For misspellings we recolor the TEXT in `miss_color` as well as
+        // emitting the kitty curly-underline SGR. Terminals that support
+        // the extended SGR (kitty, wezterm) get curly + colored underline;
+        // others (glass and any terminal that just splits ':' like ';')
+        // still get a clear red word + plain underline. The fg override
+        // takes priority over base_fg / token fg so the spell signal wins.
+        let fg = if miss {
+            Some(MISS_COLOR.load(Ordering::Relaxed))
+        } else {
+            tok.map(|t| t.fg).or(base_fg)
+        };
         let url = tok.and_then(|t| t.osc8_url.clone());
         let underline = tok.map_or(false, |t| t.underline);
 
@@ -187,7 +212,9 @@ pub fn emit_email_line(
         if let Some(c) = fg { sgr.push_str(&format!("{}38;5;{}", sep, c)); sep = ";"; }
         if bold { sgr.push_str(&format!("{}1", sep)); sep = ";"; }
         if underline { sgr.push_str(&format!("{}4", sep)); sep = ";"; }
-        if miss { sgr.push_str(&format!("{}4:3;58:5:196", sep)); }
+        if miss {
+            sgr.push_str(&format!("{}4:3;58:5:{}", sep, miss_color()));
+        }
         if sgr.len() > 2 { sgr.push('m'); out.push_str(&sgr); }
 
         out.push_str(&line[pos..next]);

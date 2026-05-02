@@ -39,4 +39,5 @@ pub use source::{
 pub use email::{
     EmailLineStyle, line_style_email, find_sig_start,
     InlineToken, inline_tokens, emit_email_line, color_emails,
+    set_miss_color, miss_color,
 };
