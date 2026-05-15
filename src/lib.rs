@@ -31,7 +31,8 @@ pub mod email;
 // Theme + dispatch — most callers want these.
 pub use source::{
     available_themes, set_theme, theme_by_name,
-    highlight, highlight_hyperlist, highlight_markdown, highlight_tex, highlight_text,
+    highlight, highlight_hyperlist, highlight_markdown, highlight_markdown_source,
+    highlight_tex, highlight_text,
     lang_known,
 };
 

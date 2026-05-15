@@ -15,6 +15,12 @@ pub struct Theme {
     pub func: u8,
     pub preproc: u8,
     pub punct: u8,
+    /// Markdown header colors per level. Levels 4..6 share `md_h_other`
+    /// since the visual hierarchy doesn't need 6 distinct shades.
+    pub md_h1: u8,
+    pub md_h2: u8,
+    pub md_h3: u8,
+    pub md_h_other: u8,
 }
 
 static ACTIVE_THEME: Mutex<Option<Theme>> = Mutex::new(None);
@@ -36,26 +42,32 @@ pub fn theme_by_name(name: &str) -> Theme {
         "monokai" => Theme {
             keyword: 197, string: 78, comment: 242, number: 141,
             typ: 81, func: 148, preproc: 197, punct: 248,
+            md_h1: 51, md_h2: 117, md_h3: 220, md_h_other: 165,
         },
         "solarized" => Theme {
             keyword: 136, string: 64, comment: 245, number: 125,
             typ: 33, func: 166, preproc: 136, punct: 240,
+            md_h1: 33, md_h2: 136, md_h3: 166, md_h_other: 125,
         },
         "nord" => Theme {
             keyword: 110, string: 108, comment: 60, number: 176,
             typ: 73, func: 222, preproc: 110, punct: 103,
+            md_h1: 110, md_h2: 73, md_h3: 222, md_h_other: 176,
         },
         "dracula" => Theme {
             keyword: 212, string: 84, comment: 61, number: 141,
             typ: 117, func: 228, preproc: 212, punct: 189,
+            md_h1: 212, md_h2: 117, md_h3: 228, md_h_other: 141,
         },
         "gruvbox" => Theme {
             keyword: 167, string: 142, comment: 245, number: 175,
             typ: 109, func: 214, preproc: 167, punct: 223,
+            md_h1: 142, md_h2: 167, md_h3: 214, md_h_other: 109,
         },
         "plain" => Theme {
             keyword: 252, string: 252, comment: 245, number: 252,
             typ: 252, func: 252, preproc: 252, punct: 245,
+            md_h1: 252, md_h2: 252, md_h3: 252, md_h_other: 252,
         },
         _ => theme_by_name("monokai"),
     }
@@ -261,24 +273,66 @@ fn lang_for(ext: &str) -> Option<Lang> {
 
 /// Check if we have a language definition for this extension.
 pub fn lang_known(ext: &str) -> Option<()> {
-    lang_for(ext).map(|_| ())
+    // Markdown, LaTeX, and HyperList have dedicated highlighters
+    // (`highlight_markdown`, `highlight_tex`, `highlight_hyperlist`)
+    // that don't go through the keyword/comment `Lang` table — list
+    // them explicitly so the editor's `detect_kind` routes `.md`,
+    // `.tex`, `.hl`, `.woim` to `FileKind::Source(ext)` instead of
+    // falling through to `Plain`.
+    match ext {
+        "md" | "markdown" | "tex" | "latex" | "hl" | "woim" => Some(()),
+        _ => lang_for(ext).map(|_| ()),
+    }
 }
 
-// HyperList color constants (from HyperList TUI 256-color theme)
-const HL_RED: u8 = 196;     // Properties, dates, multi-line +, change markup
-const HL_GREEN: u8 = 46;    // Qualifiers [...], checkboxes, state/transition, semicolons
-const HL_BLUE: u8 = 33;     // Operators (ALL-CAPS:) - lighter for dark bg readability
-const HL_MAGENTA: u8 = 165; // References <...>, identifiers, SKIP/END
-const HL_CYAN: u8 = 51;     // Parentheses (...), quoted strings "..."
-const HL_YELLOW: u8 = 226;  // Substitutions {...}
-const HL_ORANGE: u8 = 208;  // Hash tags #tag
-const HL_GRAY: u8 = 245;    // Dimmed/truncation
+// HyperList color constants — match hyperlist.vim's `hi ... ctermfg=`
+// declarations. Vim cterm names map to the bright basic palette
+// (indices 8–15) on most modern terminals, which is what the user's
+// vim screenshot shows.
+const HL_RED:     u8 = 9;    // ctermfg=Red       — Property, multi-line `+`, dates
+const HL_GREEN:   u8 = 10;   // ctermfg=Green     — Qualifier `[…]`, checkboxes
+const HL_BLUE:    u8 = 12;   // ctermfg=Blue      — Operator ALL-CAPS:
+const HL_MAGENTA: u8 = 13;   // ctermfg=Magenta   — Identifier, Reference, END/SKIP
+const HL_CYAN:    u8 = 14;   // ctermfg=Cyan      — Comment `(…)`, Quote `"…"`
+const HL_HASH:    u8 = 184;  // ctermfg=184       — Hashtag `#tag`
+const HL_SUB:     u8 = 157;  // ctermfg=157       — Substitution `{…}`
+const HL_TYPE:    u8 = 10;   // HLsc → linked to Type — Semicolon. Most colour
+                              // schemes (and the user's vim) render Type as
+                              // green; matches the test-suite line that says
+                              // "the preceding semicolon in green".
+const HL_GRAY:    u8 = 245;  // dim / truncation
 
-/// HyperList-specific highlighting (colors from HyperList TUI spec)
+/// HyperList-specific highlighting. Each rule mirrors the corresponding
+/// `syn match` / `syn keyword` declaration in
+/// `~/Main/G/GIT-isene/hyperlist.vim/syntax/hyperlist.vim` so colors
+/// and accepted character classes are identical to vim's behaviour.
+///
+/// Element priority (must run in this order — overlap is resolved by
+/// "first matched, longest wins" the same way vim does):
+///
+///   1. `^vim:.*`                     → HLvim (gray)
+///   2. Indent (TAB / `*`)            → no color (passed through)
+///   3. `+ ` multi-line indicator     → HLmulti (red), whole line
+///   4. `\` literal marker            → HLlit (italic)
+///   5. `<digits>(<digits.>)* ` ident → HLident (magenta)
+///   6. `WORD: ` operator/property    → HLop (blue) / HLtag (red)
+///   7. Body: walk char-by-char with these rules:
+///         `[…]` qualifier            → HLqual (green)
+///         `{…}` substitution         → HLsub  (157)
+///         `<…>` / `<<…>>` reference  → HLref  (magenta)
+///         `(…)` comment              → HLcomment (cyan)
+///         `"…"` quote                → HLquote   (cyan)
+///         `#tag` hashtag             → HLhash    (184)
+///         `END` `SKIP` keywords      → HLkey     (magenta)
+///         `TODO` `FIXME` keywords    → HLtodo    (black on yellow)
+///         `;` semicolon              → HLsc      (green via Type)
+///         ` *…* `                    → HLb (bold)
+///         ` /…/ `                    → HLi (italic)
+///         ` _…_ `                    → HLu (underline)
 pub fn highlight_hyperlist(text: &str, max_lines: usize) -> String {
     let mut result = String::with_capacity(text.len() * 2);
     let mut count = 0;
-
+    let mut in_literal = false;
     for line in text.lines() {
         if count >= max_lines {
             result.push_str(&style::fg("\n...", HL_GRAY));
@@ -287,239 +341,378 @@ pub fn highlight_hyperlist(text: &str, max_lines: usize) -> String {
         if count > 0 { result.push('\n'); }
         count += 1;
 
-        // VIM modeline
-        if line.starts_with("vim:") {
-            result.push_str(&style::fg(line, HL_GRAY));
-            continue;
-        }
-
-        let trimmed = line.trim_start();
-        let indent: String = line.chars().take(line.len() - trimmed.len()).collect();
-
-        // Multi-line indicator: + at start of trimmed line
-        if trimmed.starts_with('+') {
-            result.push_str(&indent);
-            result.push_str(&style::fg(trimmed, HL_RED));
-            continue;
-        }
-
-        // Literal marker: single "\" at end of line (HLlit)
+        // Literal block markers: a line whose body is just `\` (after
+        // indent) toggles a no-syntax region. Vim's HLlit highlights
+        // the `\` itself in italic; HLlc inside the block disables
+        // syntax. Track state across lines.
+        let trimmed = line.trim_start_matches(|c: char| c == '\t' || c == '*');
+        let indent_len = line.len() - trimmed.len();
         if trimmed == "\\" {
-            result.push_str(&indent);
+            result.push_str(&line[..indent_len]);
             result.push_str(&style::italic("\\"));
+            in_literal = !in_literal;
             continue;
         }
-
-        // State marker: | at start
-        if trimmed.starts_with('|') {
-            result.push_str(&indent);
-            result.push_str(&style::fg(trimmed, HL_GREEN));
+        if in_literal {
+            // Plain emit — no syntax inside a literal block.
+            result.push_str(line);
             continue;
         }
-
-        // Transition marker: "/ " at start (but not /italic/)
-        if trimmed.starts_with("/ ") {
-            result.push_str(&indent);
-            result.push_str(&style::fg(trimmed, HL_GREEN));
-            continue;
-        }
-
-        // Process character by character
-        result.push_str(&indent);
-
-        // Identifier (numbered list): leading "[0-9.]+ " — color magenta, then continue
-        let work: Vec<char> = trimmed.chars().collect();
-        let len = work.len();
-        let mut i = 0;
-
-        {
-            let mut j = 0;
-            while j < len && (work[j].is_ascii_digit() || work[j] == '.') { j += 1; }
-            if j > 0 && j < len && work[j] == ' ' {
-                let ident: String = work[..j+1].iter().collect();
-                result.push_str(&style::fg(&ident, HL_MAGENTA));
-                i = j + 1;
-            }
-        }
-
-        // Detect property/operator header starting at `i`:
-        // scan forward for first ": " not inside brackets/parens/quotes/braces.
-        if let Some((hdr_end, is_op)) = detect_hl_header(&work[i..]) {
-            let hdr: String = work[i..i + hdr_end].iter().collect();
-            let color = if is_op { HL_BLUE } else { HL_RED };
-            result.push_str(&style::fg(&hdr, color));
-            i += hdr_end;
-        }
-
-        while i < len {
-            let ch = work[i];
-
-            // Checkboxes: [X], [O], [-], [ ], [_]
-            if ch == '[' && i + 2 < len && work[i + 2] == ']'
-                && matches!(work[i + 1], 'X' | 'x' | 'O' | 'o' | '-' | ' ' | '_')
-            {
-                let s: String = work[i..i+3].iter().collect();
-                result.push_str(&style::fg(&s, HL_GREEN));
-                i += 3;
-                continue;
-            }
-
-            // Qualifiers: [...]
-            if ch == '[' {
-                let start = i;
-                i += 1;
-                while i < len && work[i] != ']' { i += 1; }
-                if i < len { i += 1; }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_GREEN));
-                continue;
-            }
-
-            // Substitutions: {...}
-            if ch == '{' {
-                let start = i;
-                i += 1;
-                while i < len && work[i] != '}' { i += 1; }
-                if i < len { i += 1; }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_YELLOW));
-                continue;
-            }
-
-            // References: <...> or <<...>>
-            if ch == '<' && i + 1 < len && (work[i + 1].is_alphabetic() || work[i + 1] == '<') {
-                let start = i;
-                i += 1;
-                if i < len && work[i] == '<' { i += 1; } // <<
-                while i < len && work[i] != '>' { i += 1; }
-                if i < len { i += 1; } // >
-                if i < len && work[i] == '>' { i += 1; } // >>
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_MAGENTA));
-                continue;
-            }
-
-            // Parentheses (comments): (...)
-            if ch == '(' {
-                let start = i;
-                i += 1;
-                let mut depth = 1;
-                while i < len && depth > 0 {
-                    if work[i] == '(' { depth += 1; }
-                    if work[i] == ')' { depth -= 1; }
-                    i += 1;
-                }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_CYAN));
-                continue;
-            }
-
-            // Quoted strings: "..."
-            if ch == '"' {
-                let start = i;
-                i += 1;
-                while i < len && work[i] != '"' { i += 1; }
-                if i < len { i += 1; }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_CYAN));
-                continue;
-            }
-
-            // Hash tags: #tag
-            if ch == '#' && i + 1 < len && work[i + 1].is_alphanumeric() {
-                let start = i;
-                i += 1;
-                while i < len && (work[i].is_alphanumeric() || work[i] == '_' || work[i] == '-') { i += 1; }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_ORANGE));
-                continue;
-            }
-
-            // Change markup: ##< ##> ##->
-            if ch == '#' && i + 1 < len && work[i + 1] == '#' {
-                let start = i;
-                i += 2;
-                while i < len && !work[i].is_whitespace() { i += 1; }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_RED));
-                continue;
-            }
-
-            // Dates: YYYY-MM-DD with optional time
-            if ch.is_ascii_digit() && i + 9 < len
-                && work[i+4] == '-' && work[i+7] == '-'
-                && work[i+1].is_ascii_digit() && work[i+2].is_ascii_digit() && work[i+3].is_ascii_digit()
-            {
-                let start = i;
-                i += 10;
-                // Optional time: space/T + HH:MM or HH.MM
-                if i < len && (work[i] == 'T' || work[i] == ' ') {
-                    let peek = i + 1;
-                    if peek + 1 < len && work[peek].is_ascii_digit() {
-                        i += 1;
-                        while i < len && (work[i].is_ascii_digit() || work[i] == ':' || work[i] == '.') { i += 1; }
-                    }
-                }
-                let s: String = work[start..i].iter().collect();
-                result.push_str(&style::fg(&s, HL_RED));
-                continue;
-            }
-
-            // SKIP / END reserved keywords (no colon)
-            if ch.is_ascii_uppercase() {
-                let start = i;
-                while i < len && work[i].is_ascii_uppercase() { i += 1; }
-                let word: String = work[start..i].iter().collect();
-                if matches!(word.as_str(), "SKIP" | "END") {
-                    result.push_str(&style::fg(&word, HL_MAGENTA));
-                    continue;
-                }
-                result.push_str(&word);
-                continue;
-            }
-
-            // Semicolons
-            if ch == ';' {
-                result.push_str(&style::fg(";", HL_GREEN));
-                i += 1;
-                continue;
-            }
-
-            // Text formatting: *bold*
-            if ch == '*' && i + 1 < len && work[i + 1] != ' ' {
-                if let Some(end) = work[i+1..].iter().position(|&c| c == '*') {
-                    let s: String = work[i..i+end+2].iter().collect();
-                    result.push_str(&style::bold(&s));
-                    i += end + 2;
-                    continue;
-                }
-            }
-
-            // Text formatting: /italic/
-            if ch == '/' && i + 1 < len && work[i + 1] != ' ' && i > 0 {
-                if let Some(end) = work[i+1..].iter().position(|&c| c == '/') {
-                    let s: String = work[i..i+end+2].iter().collect();
-                    result.push_str(&style::italic(&s));
-                    i += end + 2;
-                    continue;
-                }
-            }
-
-            // Text formatting: _underline_
-            if ch == '_' && i + 1 < len && work[i + 1] != ' ' {
-                if let Some(end) = work[i+1..].iter().position(|&c| c == '_') {
-                    let s: String = work[i..i+end+2].iter().collect();
-                    result.push_str(&style::underline(&s));
-                    i += end + 2;
-                    continue;
-                }
-            }
-
-            result.push(ch);
-            i += 1;
-        }
+        emit_hl_line(&mut result, line);
     }
     result
+}
+
+fn emit_hl_line(out: &mut String, line: &str) {
+    // 1. `^vim:.*` modeline.
+    if line.starts_with("vim:") {
+        out.push_str(&style::fg(line, HL_GRAY));
+        return;
+    }
+    // 2. Strip leading `\t` / `*` indent (passed through verbatim).
+    let indent_len: usize = line.chars().take_while(|c| *c == '\t' || *c == '*').count();
+    let (indent, body) = line.split_at(indent_len);
+    out.push_str(indent);
+    if body.is_empty() { return; }
+
+    // 3. Multi-line indicator: `+ ` at start. Vim's HLmulti pattern
+    //    `^(\t|\*)*+ ` only matches the `+ ` itself (with the indent
+    //    in the lookbehind), so ONLY the `+ ` is red — the rest of
+    //    the line falls through to normal body highlighting.
+    let plus_marker = body.starts_with("+ ");
+    let body = if plus_marker {
+        out.push_str(&style::fg("+ ", HL_RED));
+        &body[2..]
+    } else {
+        body
+    };
+    // 4. Literal-block marker `\` on its own line.
+    if body == "\\" {
+        out.push_str(&style::italic("\\"));
+        return;
+    }
+
+    let work: Vec<char> = body.chars().collect();
+    let len = work.len();
+    let mut i = 0;
+
+    // 5. Identifier `[0-9.]+ ` — at most one leading space-terminated
+    //    sequence of digits/dots. Vim's pattern is `[0-9.]* ` which
+    //    technically allows zero digits, but rendering an empty span
+    //    isn't useful; require at least one digit.
+    {
+        let mut j = 0;
+        while j < len && (work[j].is_ascii_digit() || work[j] == '.') { j += 1; }
+        if j > 0 && j < len && work[j] == ' '
+            && work[..j].iter().any(|c| c.is_ascii_digit())
+        {
+            let ident: String = work[..j + 1].iter().collect();
+            out.push_str(&style::fg(&ident, HL_MAGENTA));
+            i = j + 1;
+        }
+    }
+
+    // 6. Property / Operator header at the START of each `;`-segment
+    //    (semicolons begin a new item on the same line, per the
+    //    HyperList definition). For each segment, look for a `: `
+    //    INSIDE that segment only — never crossing the next `;`.
+    let mut seg_start = i;
+    let mut header_emitted = false;
+    macro_rules! try_header {
+        ($from:expr) => {{
+            // End of this segment is the next `;` or end-of-line.
+            let mut seg_end = $from;
+            while seg_end < len && work[seg_end] != ';' { seg_end += 1; }
+            if let Some((hdr_end, is_op)) = detect_hl_header(&work[$from..seg_end]) {
+                let hdr: String = work[$from..$from + hdr_end].iter().collect();
+                let color = if is_op { HL_BLUE } else { HL_RED };
+                out.push_str(&style::fg(&hdr, color));
+                i = $from + hdr_end;
+                header_emitted = true;
+            } else if work[$from..seg_end].starts_with(&['S', ':', ' '])
+                   || work[$from..seg_end].starts_with(&['T', ':', ' '])
+            {
+                // S: / T: state/transition marker.
+                let mark: String = work[$from..$from + 3].iter().collect();
+                out.push_str(&style::fg(&mark, HL_BLUE));
+                i = $from + 3;
+            } else if $from + 2 <= len && work[$from] == '|' && work[$from + 1] == ' ' {
+                out.push_str(&style::fg("| ", HL_BLUE));
+                i = $from + 2;
+            } else if $from + 2 <= len && $from == 0 && work[$from] == '/' && work[$from + 1] == ' ' {
+                out.push_str(&style::fg("/ ", HL_BLUE));
+                i = $from + 2;
+            }
+        }};
+    }
+    try_header!(seg_start);
+    // Suppress unused-assignment warning if header_emitted goes
+    // unused later.
+    let _ = header_emitted;
+
+    // 7. Body walk.
+    while i < len {
+        let ch = work[i];
+
+        // Semicolon: emit + restart header detection for the next segment.
+        if ch == ';' {
+            out.push_str(&style::fg(";", HL_TYPE));
+            i += 1;
+            // Skip optional space after `;`, but DO render it.
+            // (Vim's HLtag char class allows leading space, so the
+            // header detect handles it; here we just retry.)
+            seg_start = i;
+            try_header!(seg_start);
+            continue;
+        }
+
+        // Checkbox: `[ ]` `[_]` `[-]` `[X]` `[x]` `[O]` `[o]`.
+        if ch == '[' && i + 2 < len && work[i + 2] == ']'
+            && matches!(work[i + 1], 'X' | 'x' | 'O' | 'o' | '-' | ' ' | '_')
+        {
+            let s: String = work[i..i + 3].iter().collect();
+            out.push_str(&style::fg(&s, HL_GREEN));
+            i += 3;
+            continue;
+        }
+        // Qualifier `[…]` (greedy non-greedy: stop at first `]`).
+        if ch == '[' {
+            let start = i;
+            i += 1;
+            while i < len && work[i] != ']' { i += 1; }
+            if i < len { i += 1; }
+            let s: String = work[start..i].iter().collect();
+            out.push_str(&style::fg(&s, HL_GREEN));
+            continue;
+        }
+        // Substitution `{…}`.
+        if ch == '{' {
+            let start = i;
+            i += 1;
+            while i < len && work[i] != '}' { i += 1; }
+            if i < len { i += 1; }
+            let s: String = work[start..i].iter().collect();
+            out.push_str(&style::fg(&s, HL_SUB));
+            continue;
+        }
+        // Reference `<…>` or `<<…>>`. Vim's char class is wide; we
+        // accept anything except `>` until close.
+        if ch == '<' {
+            let start = i;
+            i += 1;
+            if i < len && work[i] == '<' { i += 1; }
+            while i < len && work[i] != '>' { i += 1; }
+            if i < len { i += 1; }
+            if i < len && work[i] == '>' { i += 1; }
+            let s: String = work[start..i].iter().collect();
+            // Validate: must contain at least one non-`<` `>` char.
+            if s.len() >= 3 {
+                out.push_str(&style::fg(&s, HL_MAGENTA));
+            } else {
+                out.push_str(&s);
+            }
+            continue;
+        }
+        // Comment `(…)` (nested-aware). Inner refs / hashtags / TODOs
+        // keep their own colors per vim's `contains=` clauses.
+        if ch == '(' {
+            let start = i;
+            i += 1;
+            let mut depth = 1;
+            while i < len && depth > 0 {
+                if work[i] == '(' { depth += 1; }
+                else if work[i] == ')' { depth -= 1; }
+                i += 1;
+            }
+            let s: String = work[start..i].iter().collect();
+            emit_with_inner(out, &s, HL_CYAN);
+            continue;
+        }
+        // Quote `"…"`. Inner refs / hashtags / TODOs keep their own
+        // colors (vim's HLquote contains HLref, HLhash, HLtodo).
+        if ch == '"' {
+            let start = i;
+            i += 1;
+            while i < len && work[i] != '"' { i += 1; }
+            if i < len { i += 1; }
+            let s: String = work[start..i].iter().collect();
+            emit_with_inner(out, &s, HL_CYAN);
+            continue;
+        }
+        // Change markup `##<` / `##>` / `##->` / `##text##` — vim
+        // colours the trailing markup in `Error` / `HLmove` (red).
+        if ch == '#' && i + 1 < len && work[i + 1] == '#' {
+            let start = i;
+            i += 2;
+            while i < len && !work[i].is_whitespace() { i += 1; }
+            let s: String = work[start..i].iter().collect();
+            out.push_str(&style::fg(&s, HL_RED));
+            continue;
+        }
+        // Hashtag `#tag` — vim's char class:
+        //   [a-zA-ZæøåÆØÅáéóúãõâêôçàÁÉÓÚÃÕÂÊÔÇÀü0-9.:/_&?%=+\-\*]+
+        if ch == '#' && i + 1 < len && hl_hash_char(work[i + 1]) {
+            let start = i;
+            i += 1;
+            while i < len && hl_hash_char(work[i]) { i += 1; }
+            let s: String = work[start..i].iter().collect();
+            out.push_str(&style::fg(&s, HL_HASH));
+            continue;
+        }
+        // Reserved keywords END / SKIP — only as standalone words.
+        if ch == 'E' || ch == 'S' {
+            let start = i;
+            while i < len && work[i].is_ascii_uppercase() { i += 1; }
+            let word: String = work[start..i].iter().collect();
+            if matches!(word.as_str(), "END" | "SKIP")
+                && (i >= len || !work[i].is_alphanumeric())
+            {
+                out.push_str(&style::fg(&word, HL_MAGENTA));
+                continue;
+            }
+            i = start;
+        }
+        // TODO / FIXME — black on yellow.
+        if ch == 'T' || ch == 'F' {
+            let start = i;
+            while i < len && work[i].is_ascii_uppercase() { i += 1; }
+            let word: String = work[start..i].iter().collect();
+            if matches!(word.as_str(), "TODO" | "FIXME")
+                && (i >= len || !work[i].is_alphanumeric())
+            {
+                out.push_str(&style::bg(&style::fg(&word, 0), 11));
+                continue;
+            }
+            i = start;
+        }
+        // (Semicolon handled above so it can re-trigger header detection
+        // for the new segment.)
+        // `*bold*` — must be preceded by space/tab/newline AND the
+        // closing `*` must be followed by space/EOL.
+        if ch == '*'
+            && (i == 0 || work[i - 1] == ' ' || work[i - 1] == '\t')
+            && i + 1 < len && work[i + 1] != ' ' && work[i + 1] != '*'
+        {
+            if let Some(rel) = work[i + 1..].iter().position(|&c| c == '*') {
+                let close = i + 1 + rel;
+                let after_ok = close + 1 >= len || work[close + 1] == ' ';
+                if after_ok {
+                    let s: String = work[i..=close].iter().collect();
+                    out.push_str(&style::bold(&s));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        // `/italic/` — same boundary rules as bold.
+        if ch == '/'
+            && (i == 0 || work[i - 1] == ' ' || work[i - 1] == '\t')
+            && i + 1 < len && work[i + 1] != ' ' && work[i + 1] != '/'
+        {
+            if let Some(rel) = work[i + 1..].iter().position(|&c| c == '/') {
+                let close = i + 1 + rel;
+                let after_ok = close + 1 >= len || work[close + 1] == ' ';
+                if after_ok {
+                    let s: String = work[i..=close].iter().collect();
+                    out.push_str(&style::italic(&s));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        // `_underline_` — same boundary rules.
+        if ch == '_'
+            && (i == 0 || work[i - 1] == ' ' || work[i - 1] == '\t')
+            && i + 1 < len && work[i + 1] != ' ' && work[i + 1] != '_'
+        {
+            if let Some(rel) = work[i + 1..].iter().position(|&c| c == '_') {
+                let close = i + 1 + rel;
+                let after_ok = close + 1 >= len || work[close + 1] == ' ';
+                if after_ok {
+                    let s: String = work[i..=close].iter().collect();
+                    out.push_str(&style::underline(&s));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(ch);
+        i += 1;
+    }
+}
+
+/// Emit a delimited region (comment, quote) in `outer_color` while
+/// still highlighting nested elements that vim's `contains=` clause
+/// keeps active inside: References (HLref → magenta), Hashtags
+/// (HLhash → 184), and TODO / FIXME (HLtodo → black on yellow).
+fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
+    let chars: Vec<char> = full.chars().collect();
+    let n = chars.len();
+    out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+    let mut i = 0;
+    while i < n {
+        let c = chars[i];
+
+        // Reference `<…>` / `<<…>>` — close outer, emit ref in
+        // magenta, reopen outer.
+        if c == '<' {
+            let start = i;
+            i += 1;
+            if i < n && chars[i] == '<' { i += 1; }
+            while i < n && chars[i] != '>' { i += 1; }
+            if i < n { i += 1; }
+            if i < n && chars[i] == '>' { i += 1; }
+            if i - start >= 3 {
+                let s: String = chars[start..i].iter().collect();
+                out.push_str("\x1b[39m");
+                out.push_str(&style::fg(&s, HL_MAGENTA));
+                out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+                continue;
+            }
+            // Too short to be a ref: emit as plain.
+            for &x in &chars[start..i] { out.push(x); }
+            continue;
+        }
+        // Hashtag `#tag`.
+        if c == '#' && i + 1 < n && hl_hash_char(chars[i + 1]) {
+            let start = i;
+            i += 1;
+            while i < n && hl_hash_char(chars[i]) { i += 1; }
+            let s: String = chars[start..i].iter().collect();
+            out.push_str("\x1b[39m");
+            out.push_str(&style::fg(&s, HL_HASH));
+            out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+            continue;
+        }
+        // TODO / FIXME — black on yellow.
+        if c == 'T' || c == 'F' {
+            let start = i;
+            while i < n && chars[i].is_ascii_uppercase() { i += 1; }
+            let word: String = chars[start..i].iter().collect();
+            if matches!(word.as_str(), "TODO" | "FIXME")
+                && (i >= n || !chars[i].is_alphanumeric())
+            {
+                out.push_str("\x1b[39m");
+                out.push_str(&style::bg(&style::fg(&word, 0), 11));
+                out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+                continue;
+            }
+            i = start;
+        }
+
+        out.push(c);
+        i += 1;
+    }
+    out.push_str("\x1b[39m");
+}
+
+/// Char class for HLhash content (matches vim's regex):
+///   [a-zA-Zæøå…ü0-9.:/_&?%=+\-\*]+
+fn hl_hash_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, '.' | ':' | '/' | '_' | '&' | '?' | '%' | '=' | '+' | '-' | '*')
+        || matches!(c, 'æ'|'ø'|'å'|'Æ'|'Ø'|'Å'|'á'|'é'|'ó'|'ú'|'ã'|'õ'|'â'|'ê'|'ô'|'ç'|'à'
+                      |'Á'|'É'|'Ó'|'Ú'|'Ã'|'Õ'|'Â'|'Ê'|'Ô'|'Ç'|'À'|'ü')
 }
 
 /// Detect a HyperList Property (HLtag) or Operator (HLop) line header.
@@ -832,19 +1025,21 @@ fn plain_with_limit(text: &str, max_lines: usize) -> String {
     result
 }
 
-// Shared inline color helpers for markdown/text highlighters
-const MD_H1: u8 = 51;        // bright cyan
-const MD_H2: u8 = 117;       // cyan
-const MD_H3: u8 = 220;       // yellow
-const MD_H_OTHER: u8 = 165;  // magenta
-const MD_BOLD: u8 = 255;     // bright white
-const MD_CODE: u8 = 78;      // green
-const MD_LINK_TEXT: u8 = 81; // bright blue
-const MD_LINK_URL: u8 = 245; // dim
-const MD_QUOTE: u8 = 245;    // dim
-const MD_BULLET: u8 = 220;   // yellow
-const MD_RULE: u8 = 240;     // dim
-const MD_HTML: u8 = 108;     // muted green for html tags
+// Markdown color slots — header levels come from the active theme;
+// the remaining elements piggy-back on the theme's general fields so
+// changing theme moves the whole md palette in lockstep.
+fn md_h1()        -> u8 { theme().md_h1 }
+fn md_h2()        -> u8 { theme().md_h2 }
+fn md_h3()        -> u8 { theme().md_h3 }
+fn md_h_other()   -> u8 { theme().md_h_other }
+fn md_bold()      -> u8 { theme().keyword }
+fn md_code()      -> u8 { theme().string }
+fn md_link_text() -> u8 { theme().typ }
+fn md_link_url()  -> u8 { theme().comment }
+fn md_quote()     -> u8 { theme().comment }
+fn md_bullet()    -> u8 { theme().func }
+fn md_rule()      -> u8 { theme().punct }
+fn md_html()      -> u8 { theme().preproc }
 
 const TEX_CMD: u8 = 51;      // bright cyan
 const TEX_ENV: u8 = 117;     // cyan (bold at callsite)
@@ -858,12 +1053,26 @@ const TXT_URL: u8 = 81;      // bright blue
 const TXT_EMAIL: u8 = 78;    // green
 const TXT_TODO: u8 = 208;    // orange
 
-/// Markdown highlighter: headers, bold, italic, inline/fenced code, links,
-/// blockquotes, lists, horizontal rules.
+/// Markdown highlighter for VIEW contexts (kastrup body, pointer
+/// preview): expands `| col1 | col2 |` Markdown tables into
+/// Unicode-box-drawn tables before per-line highlighting. The
+/// rendered output may have a DIFFERENT line count than the input
+/// because each source table block becomes multi-row box drawing.
 pub fn highlight_markdown(text: &str, max_lines: usize) -> String {
-    // Expand Markdown tables into Unicode-box blocks before per-line
-    // highlighting so the highlighter sees already-laid-out rows.
     let text = crust::text::format_markdown_tables(text, 100);
+    highlight_markdown_inner(&text, max_lines)
+}
+
+/// Markdown highlighter for SOURCE contexts (scribe editor): line
+/// count is preserved 1:1 with the input. Tables stay as their
+/// `| col1 | col2 |` source form. Use this whenever rendered rows
+/// must align with buffer line indices (cursor positioning, edit
+/// operations, scroll math).
+pub fn highlight_markdown_source(text: &str, max_lines: usize) -> String {
+    highlight_markdown_inner(text, max_lines)
+}
+
+fn highlight_markdown_inner(text: &str, max_lines: usize) -> String {
     let mut out = String::with_capacity(text.len() * 2);
     let mut in_fence = false;
     let mut fence_marker = String::new();
@@ -871,7 +1080,7 @@ pub fn highlight_markdown(text: &str, max_lines: usize) -> String {
 
     for line in text.lines() {
         if count >= max_lines {
-            out.push_str(&style::fg("\n...", MD_RULE));
+            out.push_str(&style::fg("\n...", md_rule()));
             break;
         }
         if count > 0 { out.push('\n'); }
@@ -891,11 +1100,11 @@ pub fn highlight_markdown(text: &str, max_lines: usize) -> String {
                 in_fence = true;
                 fence_marker = marker.to_string();
             }
-            out.push_str(&style::fg(line, MD_CODE));
+            out.push_str(&style::fg(line, md_code()));
             continue;
         }
         if in_fence {
-            out.push_str(&style::fg(line, MD_CODE));
+            out.push_str(&style::fg(line, md_code()));
             continue;
         }
 
@@ -906,39 +1115,39 @@ pub fn highlight_markdown(text: &str, max_lines: usize) -> String {
                 || no_ws.chars().all(|c| c == '*')
                 || no_ws.chars().all(|c| c == '_'))
         {
-            out.push_str(&style::fg(line, MD_RULE));
+            out.push_str(&style::fg(line, md_rule()));
             continue;
         }
 
         // Headers
         if let Some(rest) = trimmed.strip_prefix("###### ") {
-            out.push_str(&style::bold(&style::fg(&format!("###### {}", rest), MD_H_OTHER)));
+            out.push_str(&style::bold(&style::fg(&format!("###### {}", rest), md_h_other())));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("##### ") {
-            out.push_str(&style::bold(&style::fg(&format!("##### {}", rest), MD_H_OTHER)));
+            out.push_str(&style::bold(&style::fg(&format!("##### {}", rest), md_h_other())));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("#### ") {
-            out.push_str(&style::bold(&style::fg(&format!("#### {}", rest), MD_H_OTHER)));
+            out.push_str(&style::bold(&style::fg(&format!("#### {}", rest), md_h_other())));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("### ") {
-            out.push_str(&style::bold(&style::fg(&format!("### {}", rest), MD_H3)));
+            out.push_str(&style::bold(&style::fg(&format!("### {}", rest), md_h3())));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("## ") {
-            out.push_str(&style::bold(&style::fg(&format!("## {}", rest), MD_H2)));
+            out.push_str(&style::bold(&style::fg(&format!("## {}", rest), md_h2())));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("# ") {
-            out.push_str(&style::bold(&style::fg(&format!("# {}", rest), MD_H1)));
+            out.push_str(&style::bold(&style::fg(&format!("# {}", rest), md_h1())));
             continue;
         }
 
         // Blockquote
         if trimmed.starts_with('>') {
-            out.push_str(&style::italic(&style::fg(line, MD_QUOTE)));
+            out.push_str(&style::italic(&style::fg(line, md_quote())));
             continue;
         }
 
@@ -949,7 +1158,7 @@ pub fn highlight_markdown(text: &str, max_lines: usize) -> String {
         // List item marker
         let (marker_end, rest_after_marker) = detect_list_marker(trimmed);
         if marker_end > 0 {
-            out.push_str(&style::bold(&style::fg(&trimmed[..marker_end], MD_BULLET)));
+            out.push_str(&style::bold(&style::fg(&trimmed[..marker_end], md_bullet())));
             inline_md(rest_after_marker, &mut out);
             continue;
         }
@@ -989,36 +1198,46 @@ fn inline_md(line: &str, out: &mut String) {
         if chars[i] == '`' {
             if let Some(end) = chars[i + 1..].iter().position(|&c| c == '`') {
                 let content: String = chars[i..=i + 1 + end].iter().collect();
-                out.push_str(&style::fg(&content, MD_CODE));
+                out.push_str(&style::fg(&content, md_code()));
                 i += 2 + end;
                 continue;
             }
         }
-        // Bold **...**
+        // Bold **...** — preserve markers in output so source columns
+        // match buffer columns exactly. CHAR-index walk: don't use
+        // `String::find` here, its byte index would skip chars when
+        // the bolded span contains multi-byte chars (e.g. `₂` in
+        // `[Fe₂O₃]`).
         if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
-            let rest: String = chars[i + 2..].iter().collect();
-            if let Some(end) = rest.find("**") {
+            let end = chars[i + 2..].windows(2)
+                .position(|w| w[0] == '*' && w[1] == '*');
+            if let Some(end) = end {
                 let content: String = chars[i + 2..i + 2 + end].iter().collect();
-                out.push_str(&style::bold(&style::fg(&content, MD_BOLD)));
+                out.push_str(&style::bold(&style::fg(&format!("**{}**", content), md_bold())));
                 i += 4 + end;
                 continue;
             }
         }
-        // Italic *...* (single) or _..._
+        // Italic *...* (single) or _..._ — preserve markers in output.
         if chars[i] == '*' || chars[i] == '_' {
             let delim = chars[i];
             if i + 1 < chars.len() && chars[i + 1] != delim && chars[i + 1] != ' ' {
                 if let Some(end) = chars[i + 1..].iter().position(|&c| c == delim) {
                     let content: String = chars[i + 1..i + 1 + end].iter().collect();
                     if !content.contains('\n') && !content.is_empty() {
-                        out.push_str(&style::italic(&content));
+                        let with_markers = format!("{}{}{}", delim, content, delim);
+                        out.push_str(&style::italic(&with_markers));
                         i += 2 + end;
                         continue;
                     }
                 }
             }
         }
-        // Markdown link [text](url)
+        // Markdown link [text](url) — preserve every source char 1:1
+        // (brackets and parens included) so this is safe to use in
+        // editor / source contexts where rendered column count must
+        // equal buffer column count. Brackets render dim; the link
+        // text is underlined; the URL inside parens is dim.
         if chars[i] == '[' {
             if let Some(close_txt) = chars[i + 1..].iter().position(|&c| c == ']') {
                 let after = i + 1 + close_txt + 1;
@@ -1026,8 +1245,10 @@ fn inline_md(line: &str, out: &mut String) {
                     if let Some(close_url) = chars[after + 1..].iter().position(|&c| c == ')') {
                         let text: String = chars[i + 1..i + 1 + close_txt].iter().collect();
                         let url: String = chars[after + 1..after + 1 + close_url].iter().collect();
-                        out.push_str(&style::underline(&style::fg(&text, MD_LINK_TEXT)));
-                        out.push_str(&style::fg(&format!("({})", url), MD_LINK_URL));
+                        out.push_str(&style::fg("[", md_link_url()));
+                        out.push_str(&style::underline(&style::fg(&text, md_link_text())));
+                        out.push_str(&style::fg("]", md_link_url()));
+                        out.push_str(&style::fg(&format!("({})", url), md_link_url()));
                         i = after + 1 + close_url + 1;
                         continue;
                     }
@@ -1040,9 +1261,9 @@ fn inline_md(line: &str, out: &mut String) {
                 let content: String = chars[i + 1..i + 1 + close].iter().collect();
                 let seq: String = chars[i..=i + 1 + close].iter().collect();
                 if content.starts_with("http://") || content.starts_with("https://") {
-                    out.push_str(&style::underline(&style::fg(&seq, MD_LINK_TEXT)));
+                    out.push_str(&style::underline(&style::fg(&seq, md_link_text())));
                 } else {
-                    out.push_str(&style::fg(&seq, MD_HTML));
+                    out.push_str(&style::fg(&seq, md_html()));
                 }
                 i += 2 + close;
                 continue;
@@ -1165,7 +1386,7 @@ pub fn highlight_text(text: &str, max_lines: usize) -> String {
     let mut count = 0;
     for line in text.lines() {
         if count >= max_lines {
-            out.push_str(&style::fg("\n...", MD_RULE));
+            out.push_str(&style::fg("\n...", md_rule()));
             break;
         }
         if count > 0 { out.push('\n'); }
