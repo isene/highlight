@@ -1397,19 +1397,29 @@ pub fn highlight_text(text: &str, max_lines: usize) -> String {
 }
 
 fn highlight_text_line(line: &str, out: &mut String) {
-    // Tokenize on whitespace to find URLs/emails, then scan each word for TODO etc.
-    let mut last = 0;
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        // Skip whitespace
-        while i < len && (bytes[i] as char).is_whitespace() { i += 1; }
-        let start = i;
-        while i < len && !(bytes[i] as char).is_whitespace() { i += 1; }
-        if start == i { break; }
+    // Tokenize on whitespace to find URLs/emails, then scan each word
+    // for TODO etc. Must iterate by `char_indices` — a byte-level
+    // `bytes[i] as char` test mis-classifies UTF-8 continuation bytes:
+    // e.g. '∅' (U+2205) = E2 88 85, and 0x85 cast straight to char is
+    // U+0085 (NEXT LINE) which `is_whitespace()` returns true for.
+    // The byte loop would then split inside the '∅' and `&line[start..i]`
+    // panic on the char-boundary check.
+    let chars: Vec<(usize, char)> = line.char_indices().collect();
+    let total = chars.len();
+    let line_len = line.len();
+    let mut last = 0usize;
+    let mut idx = 0usize;
+    while idx < total {
+        // Skip whitespace chars.
+        while idx < total && chars[idx].1.is_whitespace() { idx += 1; }
+        if idx >= total { break; }
+        let start = chars[idx].0;
+        // Walk to next whitespace.
+        while idx < total && !chars[idx].1.is_whitespace() { idx += 1; }
+        let end = if idx < total { chars[idx].0 } else { line_len };
+        let i = end;  // alias: rest of the function uses `i`
         let word = &line[start..i];
-        // Flush prior segment
+        // Flush prior segment.
         out.push_str(&line[last..start]);
         last = i;
 
