@@ -495,22 +495,19 @@ fn emit_hl_line(out: &mut String, line: &str) {
             out.push_str(&style::fg(&s, HL_SUB));
             continue;
         }
-        // Reference `<…>` or `<<…>>`. Vim's char class is wide; we
-        // accept anything except `>` until close.
+        // Reference `<…>` or `<<…>>`. Restricted char class (see
+        // `hl_ref_match`) so a `<` inside a `[...]` qualifier or a
+        // crossed bracket isn't mistaken for a reference.
         if ch == '<' {
-            let start = i;
-            i += 1;
-            if i < len && work[i] == '<' { i += 1; }
-            while i < len && work[i] != '>' { i += 1; }
-            if i < len { i += 1; }
-            if i < len && work[i] == '>' { i += 1; }
-            let s: String = work[start..i].iter().collect();
-            // Validate: must contain at least one non-`<` `>` char.
-            if s.len() >= 3 {
+            if let Some(end) = hl_ref_match(&work, i) {
+                let s: String = work[i..end].iter().collect();
                 out.push_str(&style::fg(&s, HL_MAGENTA));
-            } else {
-                out.push_str(&s);
+                i = end;
+                continue;
             }
+            // Not a reference — emit the literal `<` and move on.
+            out.push('<');
+            i += 1;
             continue;
         }
         // Comment `(…)` (nested-aware). Inner refs / hashtags / TODOs
@@ -654,23 +651,20 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
         let c = chars[i];
 
         // Reference `<…>` / `<<…>>` — close outer, emit ref in
-        // magenta, reopen outer.
+        // magenta, reopen outer. Same restricted char class as the
+        // top-level scanner (`hl_ref_match`).
         if c == '<' {
-            let start = i;
-            i += 1;
-            if i < n && chars[i] == '<' { i += 1; }
-            while i < n && chars[i] != '>' { i += 1; }
-            if i < n { i += 1; }
-            if i < n && chars[i] == '>' { i += 1; }
-            if i - start >= 3 {
-                let s: String = chars[start..i].iter().collect();
+            if let Some(end) = hl_ref_match(&chars, i) {
+                let s: String = chars[i..end].iter().collect();
                 out.push_str("\x1b[39m");
                 out.push_str(&style::fg(&s, HL_MAGENTA));
                 out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+                i = end;
                 continue;
             }
-            // Too short to be a ref: emit as plain.
-            for &x in &chars[start..i] { out.push(x); }
+            // Not a reference — emit the literal `<` in outer color.
+            out.push('<');
+            i += 1;
             continue;
         }
         // Hashtag `#tag`.
@@ -704,6 +698,38 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
         i += 1;
     }
     out.push_str("\x1b[39m");
+}
+
+/// Char class for HLref content (matches vim's hyperlist.vim regex
+/// `HLref = '<\{1,2}[a-zA-Z…ü0-9,.:/ _~&@?%=\+\-\*#]\+>\{1,2}'`).
+/// Crucially this EXCLUDES `[ ] " ( ) { } < >`, so a `<` inside a
+/// qualifier like `[<+YYYY-MM-DD]` or a crossed bracket like
+/// `<Item]>` is NOT a reference — matching vim.
+fn hl_ref_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, ',' | '.' | ':' | '/' | ' ' | '_' | '~' | '&' | '@'
+                      | '?' | '%' | '=' | '+' | '-' | '*' | '#')
+        || matches!(c, 'æ'|'ø'|'å'|'Æ'|'Ø'|'Å'|'á'|'é'|'ó'|'ú'|'ã'|'õ'|'â'|'ê'|'ô'|'ç'|'à'
+                      |'Á'|'É'|'Ó'|'Ú'|'Ã'|'Õ'|'Â'|'Ê'|'Ô'|'Ç'|'À'|'ü')
+}
+
+/// If a valid HyperList reference starts at `chars[start]` (which must
+/// be `<`), return the exclusive end index. A reference is `<`/`<<`,
+/// one or more `hl_ref_char`s, then `>`/`>>`. Returns `None` when the
+/// body is empty or no closing `>` immediately follows the body — in
+/// which case the `<` is a literal (e.g. the time-relation operator
+/// in `[<+YYYY-MM-DD]`), not a reference.
+fn hl_ref_match(chars: &[char], start: usize) -> Option<usize> {
+    let n = chars.len();
+    let mut j = start + 1;
+    if j < n && chars[j] == '<' { j += 1; } // optional second '<'
+    let body_start = j;
+    while j < n && hl_ref_char(chars[j]) { j += 1; }
+    if j == body_start { return None; }      // empty body
+    if j >= n || chars[j] != '>' { return None; } // must close with '>'
+    j += 1;
+    if j < n && chars[j] == '>' { j += 1; }  // optional second '>'
+    Some(j)
 }
 
 /// Char class for HLhash content (matches vim's regex):
