@@ -1216,10 +1216,66 @@ fn detect_list_marker(trimmed: &str) -> (usize, &str) {
 
 /// Inline markdown: **bold**, *italic* or _italic_, `code`, [text](url),
 /// autolinks <url>, HTML tags.
+/// If `rest` begins with an inline colour span
+/// (`<span style="color:#rrggbb;background-color:#rrggbb">TEXT</span>`),
+/// return (chars consumed, ANSI rendering): inner TEXT in the span's
+/// colours, the tags dimmed. Otherwise None. Used by `inline_md` so the
+/// colour shows live; the span itself is real HTML that exports cleanly.
+fn color_span_ansi(rest: &str) -> Option<(usize, String)> {
+    if !rest.starts_with("<span style=\"") { return None; }
+    let gt = rest.find('>')?;                 // end of the opening tag
+    let open = &rest[..=gt];
+    let key_start = "<span style=\"".len();
+    let q2 = open.rfind('"')?;
+    if q2 <= key_start { return None; }
+    let decls = &open[key_start..q2];
+    let fg = css_hex(decls, "color");
+    let bg = css_hex(decls, "background-color");
+    if fg.is_none() && bg.is_none() { return None; }
+    let after = &rest[gt + 1..];
+    let close = after.find("</span>")?;
+    let inner = &after[..close];
+    let mut s = String::new();
+    s.push_str(&style::fg(open, 240));
+    s.push_str(&style::coded_rgb(inner, fg, bg));
+    s.push_str(&style::fg("</span>", 240));
+    let consumed = open.chars().count() + inner.chars().count() + "</span>".chars().count();
+    Some((consumed, s))
+}
+
+/// Pull a `#rrggbb` value for `key` out of a CSS declaration list
+/// (`color:#..;background-color:#..`). Exact-key match so `color`
+/// doesn't also match inside `background-color`.
+fn css_hex(decls: &str, key: &str) -> Option<(u8, u8, u8)> {
+    for decl in decls.split(';') {
+        let mut it = decl.splitn(2, ':');
+        let k = it.next().unwrap_or("").trim();
+        let v = it.next().unwrap_or("").trim();
+        if k == key { return style::parse_hex_color(v); }
+    }
+    None
+}
+
 fn inline_md(line: &str, out: &mut String) {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
     while i < chars.len() {
+        // Inline colour span: <span style="color:#..;background-color:#..">…</span>
+        // Render the inner text in those colours; keep the tags dimmed so
+        // source columns still line up with the buffer (same idea as the
+        // *bold* / _italic_ markers below). Scribe's `\C` writes these.
+        if chars[i] == '<'
+            && i + 5 <= chars.len()
+            && chars[i + 1] == 's' && chars[i + 2] == 'p'
+            && chars[i + 3] == 'a' && chars[i + 4] == 'n'
+        {
+            let rest: String = chars[i..].iter().collect();
+            if let Some((consumed, rendered)) = color_span_ansi(&rest) {
+                out.push_str(&rendered);
+                i += consumed;
+                continue;
+            }
+        }
         // Inline code `...`
         if chars[i] == '`' {
             if let Some(end) = chars[i + 1..].iter().position(|&c| c == '`') {
