@@ -25,6 +25,28 @@ pub struct Theme {
 
 static ACTIVE_THEME: Mutex<Option<Theme>> = Mutex::new(None);
 
+// scribe's `\M` markup toggle. When CONCEAL_SPANS is set, inline colour/font
+// span tags are hidden on every line EXCEPT REVEAL_LINE (the cursor's line, so
+// the markup stays editable where the cursor sits). CUR_LINE is updated by the
+// per-line render loops so color_span_ansi knows which line it's on.
+static CONCEAL_SPANS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static REVEAL_LINE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(usize::MAX);
+static CUR_LINE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Toggle span-tag concealment. `reveal_line` (0-based) is always shown with
+/// full markup — pass the cursor's line so it stays editable.
+pub fn set_span_conceal(on: bool, reveal_line: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    CONCEAL_SPANS.store(on, Relaxed);
+    REVEAL_LINE.store(reveal_line, Relaxed);
+}
+
+fn conceal_current_line() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    CONCEAL_SPANS.load(Relaxed) && CUR_LINE.load(Relaxed) != REVEAL_LINE.load(Relaxed)
+}
+
 pub fn set_theme(name: &str) {
     if let Ok(mut t) = ACTIVE_THEME.lock() {
         *t = Some(theme_by_name(name));
@@ -1110,6 +1132,7 @@ fn highlight_markdown_inner(text: &str, max_lines: usize) -> String {
             break;
         }
         if count > 0 { out.push('\n'); }
+        CUR_LINE.store(count, std::sync::atomic::Ordering::Relaxed);
         count += 1;
 
         let trimmed = line.trim_start();
@@ -1240,9 +1263,16 @@ fn color_span_ansi(rest: &str) -> Option<(usize, String)> {
     let close = after.find("</span>")?;
     let inner = &after[..close];
     let mut s = String::new();
-    s.push_str(&style::fg(open, 240));
-    s.push_str(&style::coded_rgb(inner, fg, bg));
-    s.push_str(&style::fg("</span>", 240));
+    // `\M` conceal: on every line but the cursor's, show only the styled inner
+    // (drop the `<span>` tags) so the prose reads clean. The cursor's line keeps
+    // the tags so the markup stays editable there.
+    if conceal_current_line() {
+        s.push_str(&style::coded_rgb(inner, fg, bg));
+    } else {
+        s.push_str(&style::fg(open, 240));
+        s.push_str(&style::coded_rgb(inner, fg, bg));
+        s.push_str(&style::fg("</span>", 240));
+    }
     let consumed = open.chars().count() + inner.chars().count() + "</span>".chars().count();
     Some((consumed, s))
 }
@@ -1258,6 +1288,44 @@ fn css_hex(decls: &str, key: &str) -> Option<(u8, u8, u8)> {
         if k == key { return style::parse_hex_color(v); }
     }
     None
+}
+
+/// Plain text, but with scribe's inline colour/font spans rendered (inner
+/// styled, `<span>` tags dimmed). No Markdown styling is applied — for a
+/// no-extension / `.txt` prose buffer that just wants the span markup to look
+/// right before it's saved as `.md`/`.html`.
+pub fn highlight_plain_spans(text: &str, max_lines: usize) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 4);
+    let mut count = 0;
+    for line in text.lines() {
+        if count >= max_lines {
+            break;
+        }
+        if count > 0 {
+            out.push('\n');
+        }
+        CUR_LINE.store(count, std::sync::atomic::Ordering::Relaxed);
+        count += 1;
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '<'
+                && i + 5 <= chars.len()
+                && chars[i + 1] == 's' && chars[i + 2] == 'p'
+                && chars[i + 3] == 'a' && chars[i + 4] == 'n'
+            {
+                let rest: String = chars[i..].iter().collect();
+                if let Some((consumed, rendered)) = color_span_ansi(&rest) {
+                    out.push_str(&rendered);
+                    i += consumed;
+                    continue;
+                }
+            }
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 fn inline_md(line: &str, out: &mut String) {
