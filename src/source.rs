@@ -1231,7 +1231,11 @@ fn color_span_ansi(rest: &str) -> Option<(usize, String)> {
     let decls = &open[key_start..q2];
     let fg = css_hex(decls, "color");
     let bg = css_hex(decls, "background-color");
-    if fg.is_none() && bg.is_none() { return None; }
+    // Also dim the tags of font spans (scribe's `\F`), even though the
+    // terminal can't render the actual font — the inner text shows plain,
+    // the `<span>` clutter dims away, and the font applies on export.
+    let has_font = decls.contains("font-family") || decls.contains("font-size");
+    if fg.is_none() && bg.is_none() && !has_font { return None; }
     let after = &rest[gt + 1..];
     let close = after.find("</span>")?;
     let inner = &after[..close];
