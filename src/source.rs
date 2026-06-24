@@ -439,7 +439,6 @@ fn emit_hl_line(out: &mut String, line: &str) {
     //    HyperList definition). For each segment, look for a `: `
     //    INSIDE that segment only — never crossing the next `;`.
     let mut seg_start = i;
-    let mut header_emitted = false;
     macro_rules! try_header {
         ($from:expr) => {{
             // End of this segment is the next `;` or end-of-line.
@@ -450,7 +449,6 @@ fn emit_hl_line(out: &mut String, line: &str) {
                 let color = if is_op { HL_BLUE } else { HL_RED };
                 out.push_str(&style::fg(&hdr, color));
                 i = $from + hdr_end;
-                header_emitted = true;
             } else if work[$from..seg_end].starts_with(&['S', ':', ' '])
                    || work[$from..seg_end].starts_with(&['T', ':', ' '])
             {
@@ -468,9 +466,6 @@ fn emit_hl_line(out: &mut String, line: &str) {
         }};
     }
     try_header!(seg_start);
-    // Suppress unused-assignment warning if header_emitted goes
-    // unused later.
-    let _ = header_emitted;
 
     // 7. Body walk.
     while i < len {
