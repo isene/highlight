@@ -12,6 +12,7 @@
 //!   * Single-shot email-color overlay for callers that don't need the full
 //!     emit machinery → [`color_emails`]
 
+use crust::style;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -203,26 +204,26 @@ pub fn emit_email_line(
         while next < line.len() && !line.is_char_boundary(next) { next += 1; }
 
         if let Some(u) = &url {
-            out.push_str("\x1b]8;;");
-            out.push_str(u);
-            out.push_str("\x1b\\");
+            out.push_str(&style::hyperlink_open(u));
         }
-        let mut sgr = String::from("\x1b[");
+        // Assemble the SGR parameters, then let crust wrap them: the
+        // curly-underline pair (4:3 + 58) has no typed helper.
+        let mut params = String::new();
         let mut sep = "";
-        if let Some(c) = fg { sgr.push_str(&format!("{}38;5;{}", sep, c)); sep = ";"; }
-        if bold { sgr.push_str(&format!("{}1", sep)); sep = ";"; }
-        if underline { sgr.push_str(&format!("{}4", sep)); sep = ";"; }
+        if let Some(c) = fg { params.push_str(&format!("{}38;5;{}", sep, c)); sep = ";"; }
+        if bold { params.push_str(&format!("{}1", sep)); sep = ";"; }
+        if underline { params.push_str(&format!("{}4", sep)); sep = ";"; }
         if miss {
-            sgr.push_str(&format!("{}4:3;58:5:{}", sep, miss_color()));
+            params.push_str(&format!("{}4:3;58:5:{}", sep, miss_color()));
         }
-        if sgr.len() > 2 { sgr.push('m'); out.push_str(&sgr); }
+        if !params.is_empty() { out.push_str(&style::sgr(&params)); }
 
         out.push_str(&line[pos..next]);
 
-        if miss || underline { out.push_str("\x1b[24;59m"); }
-        if bold { out.push_str("\x1b[22m"); }
-        if fg.is_some() { out.push_str("\x1b[39m"); }
-        if url.is_some() { out.push_str("\x1b]8;;\x1b\\"); }
+        if miss || underline { out.push_str(&style::sgr("24;59")); }
+        if bold { out.push_str(&style::sgr("22")); }
+        if fg.is_some() { out.push_str(&style::reset_fg()); }
+        if url.is_some() { out.push_str(&style::hyperlink_close()); }
 
         pos = next;
     }
@@ -242,10 +243,10 @@ pub fn color_emails(line: &str, outer_fg: Option<u8>) -> String {
         regex::Regex::new(r#"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"#).unwrap()
     });
     let restore: String = match outer_fg {
-        Some(c) => format!("\x1b[38;5;{}m", c),
-        None    => "\x1b[39m".to_string(),
+        Some(c) => style::set_fg(c),
+        None    => style::reset_fg(),
     };
     re.replace_all(line, |caps: &regex::Captures| {
-        format!("\x1b[38;5;177m{}{}", &caps[0], restore)
+        format!("{}{}{}", style::set_fg(177), &caps[0], restore)
     }).into_owned()
 }

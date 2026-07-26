@@ -662,7 +662,7 @@ fn emit_hl_line(out: &mut String, line: &str) {
 fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
     let chars: Vec<char> = full.chars().collect();
     let n = chars.len();
-    out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+    out.push_str(&style::set_fg(outer_color));
     let mut i = 0;
     while i < n {
         let c = chars[i];
@@ -673,9 +673,9 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
         if c == '<' {
             if let Some(end) = hl_ref_match(&chars, i) {
                 let s: String = chars[i..end].iter().collect();
-                out.push_str("\x1b[39m");
+                out.push_str(&style::reset_fg());
                 out.push_str(&style::fg(&s, HL_MAGENTA));
-                out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+                out.push_str(&style::set_fg(outer_color));
                 i = end;
                 continue;
             }
@@ -690,9 +690,9 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
             i += 1;
             while i < n && hl_hash_char(chars[i]) { i += 1; }
             let s: String = chars[start..i].iter().collect();
-            out.push_str("\x1b[39m");
+            out.push_str(&style::reset_fg());
             out.push_str(&style::fg(&s, HL_HASH));
-            out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+            out.push_str(&style::set_fg(outer_color));
             continue;
         }
         // TODO / FIXME — black on yellow.
@@ -703,9 +703,9 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
             if matches!(word.as_str(), "TODO" | "FIXME")
                 && (i >= n || !chars[i].is_alphanumeric())
             {
-                out.push_str("\x1b[39m");
+                out.push_str(&style::reset_fg());
                 out.push_str(&style::bg(&style::fg(&word, 0), 11));
-                out.push_str(&format!("\x1b[38;5;{}m", outer_color));
+                out.push_str(&style::set_fg(outer_color));
                 continue;
             }
             i = start;
@@ -714,7 +714,7 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
         out.push(c);
         i += 1;
     }
-    out.push_str("\x1b[39m");
+    out.push_str(&style::reset_fg());
 }
 
 /// Char class for HLref content (matches vim's hyperlist.vim regex
