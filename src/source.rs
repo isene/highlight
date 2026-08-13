@@ -311,10 +311,11 @@ pub fn lang_known(ext: &str) -> Option<()> {
 // declarations. Vim cterm names map to the bright basic palette
 // (indices 8–15) on most modern terminals, which is what the user's
 // vim screenshot shows.
-const HL_RED:     u8 = 9;    // ctermfg=Red       — Property, multi-line `+`, dates
+const HL_RED:     u8 = 9;    // ctermfg=Red       — Property, dates
 const HL_GREEN:   u8 = 10;   // ctermfg=Green     — Qualifier `[…]`, checkboxes
 const HL_BLUE:    u8 = 12;   // ctermfg=Blue      — Operator ALL-CAPS:
-const HL_MAGENTA: u8 = 13;   // ctermfg=Magenta   — Identifier, Reference, END/SKIP
+const HL_MAGENTA: u8 = 13;   // ctermfg=Magenta   — Identifier, Starter `+ `,
+                              // Reference, END/SKIP
 const HL_CYAN:    u8 = 14;   // ctermfg=Cyan      — Comment `(…)`, Quote `"…"`
 const HL_HASH:    u8 = 184;  // ctermfg=184       — Hashtag `#tag`
 const HL_SUB:     u8 = 157;  // ctermfg=157       — Substitution `{…}`
@@ -334,7 +335,7 @@ const HL_GRAY:    u8 = 245;  // dim / truncation
 ///
 ///   1. `^vim:.*`                     → HLvim (gray)
 ///   2. Indent (TAB / `*`)            → no color (passed through)
-///   3. `+ ` multi-line indicator     → HLmulti (red), whole line
+///   3. `+ ` / `- ` Starter           → HLmulti (magenta)
 ///   4. `\` literal marker            → HLlit (italic)
 ///   5. `<digits>(<digits.>)* ` ident → HLident (magenta)
 ///   6. `WORD: ` operator/property    → HLop (blue) / HLtag (red)
@@ -399,11 +400,13 @@ fn emit_hl_line(out: &mut String, line: &str) {
 
     // 3. Multi-line indicator: `+ ` at start. Vim's HLmulti pattern
     //    `^(\t|\*)*+ ` only matches the `+ ` itself (with the indent
-    //    in the lookbehind), so ONLY the `+ ` is red — the rest of
+    //    in the lookbehind), so ONLY the `+ ` is coloured — the rest of
     //    the line falls through to normal body highlighting.
-    let plus_marker = body.starts_with("+ ");
-    let body = if plus_marker {
-        out.push_str(&style::fg("+ ", HL_RED));
+    // HyperList 2.8 made `-` a neutral Starter alongside the multi-line
+    // `+`; both take the same colour.
+    let starter = body.starts_with("+ ") || body.starts_with("- ");
+    let body = if starter {
+        out.push_str(&style::fg(&body[..2], HL_MAGENTA));
         &body[2..]
     } else {
         body
