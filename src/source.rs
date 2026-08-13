@@ -392,8 +392,13 @@ fn emit_hl_line(out: &mut String, line: &str) {
         out.push_str(&style::fg(line, HL_GRAY));
         return;
     }
-    // 2. Strip leading `\t` / `*` indent (passed through verbatim).
-    let indent_len: usize = line.chars().take_while(|c| *c == '\t' || *c == '*').count();
+    // 2. Strip leading `\t` / `*` indent (passed through verbatim). Spaces
+    //    count too: callers that expand tabs before highlighting would
+    //    otherwise hide every line-anchored rule behind the indent.
+    let indent_len: usize = line
+        .chars()
+        .take_while(|c| *c == '\t' || *c == '*' || *c == ' ')
+        .count();
     let (indent, body) = line.split_at(indent_len);
     out.push_str(indent);
     if body.is_empty() { return; }
