@@ -455,7 +455,16 @@ fn emit_hl_line(out: &mut String, line: &str) {
             if let Some((hdr_end, is_op)) = detect_hl_header(&work[$from..seg_end]) {
                 let hdr: String = work[$from..$from + hdr_end].iter().collect();
                 let color = if is_op { HL_BLUE } else { HL_RED };
-                out.push_str(&style::fg(&hdr, color));
+                // A `(comment)` inside an Operator/Property head keeps its
+                // cyan, per hyperlist.vim's contains=HLcomment on both.
+                let mut rest = hdr.as_str();
+                while let Some(a) = rest.find('(') {
+                    let Some(b) = rest[a..].find(')') else { break };
+                    out.push_str(&style::fg(&rest[..a], color));
+                    out.push_str(&style::fg(&rest[a..a + b + 1], HL_CYAN));
+                    rest = &rest[a + b + 1..];
+                }
+                out.push_str(&style::fg(rest, color));
                 i = $from + hdr_end;
             } else if work[$from..seg_end].starts_with(&['S', ':', ' '])
                    || work[$from..seg_end].starts_with(&['T', ':', ' '])
