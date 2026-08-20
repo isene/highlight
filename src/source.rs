@@ -734,17 +734,15 @@ fn emit_with_inner(out: &mut String, full: &str, outer_color: u8) {
     out.push_str(&style::reset_fg());
 }
 
-/// Char class for HLref content (matches vim's hyperlist.vim regex
-/// `HLref = '<\{1,2}[a-zA-Z…ü0-9,.:/ _~&@?%=\+\-\*#]\+>\{1,2}'`).
+/// Char class for HLref content. Any Unicode letter or digit counts,
+/// where vim's regex spells out a fixed list of accented letters.
 /// Crucially this EXCLUDES `[ ] " ( ) { } < >`, so a `<` inside a
 /// qualifier like `[<+YYYY-MM-DD]` or a crossed bracket like
 /// `<Item]>` is NOT a reference — matching vim.
 fn hl_ref_char(c: char) -> bool {
-    c.is_ascii_alphanumeric()
+    c.is_alphanumeric()
         || matches!(c, ',' | '.' | ':' | '/' | ' ' | '_' | '~' | '&' | '@'
                       | '?' | '%' | '=' | '+' | '-' | '*' | '#')
-        || matches!(c, 'æ'|'ø'|'å'|'Æ'|'Ø'|'Å'|'á'|'é'|'ó'|'ú'|'ã'|'õ'|'â'|'ê'|'ô'|'ç'|'à'
-                      |'Á'|'É'|'Ó'|'Ú'|'Ã'|'Õ'|'Â'|'Ê'|'Ô'|'Ç'|'À'|'ü')
 }
 
 /// If a valid HyperList reference starts at `chars[start]` (which must
@@ -766,13 +764,12 @@ fn hl_ref_match(chars: &[char], start: usize) -> Option<usize> {
     Some(j)
 }
 
-/// Char class for HLhash content (matches vim's regex):
-///   [a-zA-Zæøå…ü0-9.:/_&?%=+\-\*]+
+/// Char class for HLhash content. Vim's regex spells out a fixed list
+/// of accented letters and misses many (`ö`, `ä`, `ñ`, …), which cut
+/// `#Gödel` short at the `G`. Any Unicode letter or digit counts here.
 fn hl_hash_char(c: char) -> bool {
-    c.is_ascii_alphanumeric()
+    c.is_alphanumeric()
         || matches!(c, '.' | ':' | '/' | '_' | '&' | '?' | '%' | '=' | '+' | '-' | '*')
-        || matches!(c, 'æ'|'ø'|'å'|'Æ'|'Ø'|'Å'|'á'|'é'|'ó'|'ú'|'ã'|'õ'|'â'|'ê'|'ô'|'ç'|'à'
-                      |'Á'|'É'|'Ó'|'Ú'|'Ã'|'Õ'|'Â'|'Ê'|'Ô'|'Ç'|'À'|'ü')
 }
 
 /// Detect a HyperList Property (HLtag) or Operator (HLop) line header.
@@ -1626,5 +1623,42 @@ fn is_email_like(word: &str) -> bool {
         !user.is_empty() && domain.contains('.') && !domain.starts_with('.')
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hashtag runs to the end of the word whatever alphabet it is
+    /// written in. Vim's fixed accent list stopped `#Gödel` at the `G`.
+    #[test]
+    fn a_hashtag_survives_its_accents() {
+        for word in ["Gödel", "Gödel-Escher", "Ärger", "mañana", "Straße", "Ωμέγα"] {
+            let line = format!("#{}", word);
+            let out = highlight_hyperlist(&line, 1);
+            let plain: String = strip_ansi(&out);
+            assert!(plain.contains(&line), "{} not kept whole: {:?}", word, plain);
+            // The whole tag is one coloured run: no escape splits the word.
+            let tag_start = out.find('#').expect("tag");
+            let tail = &out[tag_start..];
+            let esc = tail.find('\u{1b}').unwrap_or(tail.len());
+            assert!(esc >= line.len(), "{} highlighted in pieces: {:?}", word, tail);
+        }
+    }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c2 in chars.by_ref() {
+                    if c2.is_ascii_alphabetic() { break; }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 }

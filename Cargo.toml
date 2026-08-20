@@ -1,6 +1,6 @@
 [package]
 name = "fe2o3-highlight"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 authors = ["Geir Isene <g@isene.com>"]
 description = "Lightweight syntax highlighter for the Fe2O3 terminal suite — source code (18 languages), email mode, HyperList, Markdown, LaTeX, plain text URLs."
