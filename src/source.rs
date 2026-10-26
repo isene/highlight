@@ -335,7 +335,7 @@ const HL_GRAY:    u8 = 245;  // dim / truncation
 ///
 ///   1. `^vim:.*`                     → HLvim (gray)
 ///   2. Indent (TAB / `*`)            → no color (passed through)
-///   3. `+ ` / `- ` Starter           → HLmulti (magenta)
+///   3. `+ ` Starter                  → HLmulti (magenta)
 ///   4. `\` literal marker            → HLlit (italic)
 ///   5. `<digits>(<digits.>)* ` ident → HLident (magenta)
 ///   6. `WORD: ` operator/property    → HLop (blue) / HLtag (red)
@@ -407,9 +407,8 @@ fn emit_hl_line(out: &mut String, line: &str) {
     //    `^(\t|\*)*+ ` only matches the `+ ` itself (with the indent
     //    in the lookbehind), so ONLY the `+ ` is coloured — the rest of
     //    the line falls through to normal body highlighting.
-    // HyperList 2.8 made `-` a neutral Starter alongside the multi-line
-    // `+`; both take the same colour.
-    let starter = body.starts_with("+ ") || body.starts_with("- ");
+    // A line that begins with `- ` is plain text (HyperList 2.9).
+    let starter = body.starts_with("+ ");
     let body = if starter {
         out.push_str(&style::fg(&body[..2], HL_MAGENTA));
         &body[2..]
@@ -1645,6 +1644,16 @@ mod tests {
             let esc = tail.find('\u{1b}').unwrap_or(tail.len());
             assert!(esc >= line.len(), "{} highlighted in pieces: {:?}", word, tail);
         }
+    }
+
+    /// A Starter is `+ ` or an Identifier; `- ` is plain text (HyperList 2.9).
+    #[test]
+    fn only_the_plus_is_a_starter() {
+        let plus = highlight_hyperlist("\t+ item", 1);
+        assert!(plus.contains(&style::fg("+ ", HL_MAGENTA)), "{:?}", plus);
+        let dash = highlight_hyperlist("\t- item", 1);
+        assert!(!dash.contains(&style::fg("- ", HL_MAGENTA)), "{:?}", dash);
+        assert_eq!(strip_ansi(&dash), "\t- item");
     }
 
     fn strip_ansi(s: &str) -> String {
