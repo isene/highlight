@@ -448,11 +448,21 @@ fn emit_hl_line(out: &mut String, line: &str) {
     let mut seg_start = i;
     macro_rules! try_header {
         ($from:expr) => {{
+            // A qualifier or checkbox ahead of a property keeps its green:
+            // in hyperlist.vim a property has no brackets in it.
+            let mut from = $from;
+            while from < len && work[from] == '[' {
+                let Some(e) = work[from..].iter().position(|c| *c == ']') else { break };
+                let q: String = work[from..=from + e].iter().collect();
+                out.push_str(&style::fg(&q, HL_GREEN));
+                from += e + 1;
+                i = from;
+            }
             // End of this segment is the next `;` or end-of-line.
-            let mut seg_end = $from;
+            let mut seg_end = from;
             while seg_end < len && work[seg_end] != ';' { seg_end += 1; }
-            if let Some((hdr_end, is_op)) = detect_hl_header(&work[$from..seg_end]) {
-                let hdr: String = work[$from..$from + hdr_end].iter().collect();
+            if let Some((hdr_end, is_op)) = detect_hl_header(&work[from..seg_end]) {
+                let hdr: String = work[from..from + hdr_end].iter().collect();
                 let color = if is_op { HL_BLUE } else { HL_RED };
                 // A `(comment)` inside an Operator/Property head keeps its
                 // cyan, per hyperlist.vim's contains=HLcomment on both.
@@ -464,20 +474,20 @@ fn emit_hl_line(out: &mut String, line: &str) {
                     rest = &rest[a + b + 1..];
                 }
                 out.push_str(&style::fg(rest, color));
-                i = $from + hdr_end;
-            } else if work[$from..seg_end].starts_with(&['S', ':', ' '])
-                   || work[$from..seg_end].starts_with(&['T', ':', ' '])
+                i = from + hdr_end;
+            } else if work[from..seg_end].starts_with(&['S', ':', ' '])
+                   || work[from..seg_end].starts_with(&['T', ':', ' '])
             {
                 // S: / T: state/transition marker.
-                let mark: String = work[$from..$from + 3].iter().collect();
+                let mark: String = work[from..from + 3].iter().collect();
                 out.push_str(&style::fg(&mark, HL_BLUE));
-                i = $from + 3;
-            } else if $from + 2 <= len && work[$from] == '|' && work[$from + 1] == ' ' {
+                i = from + 3;
+            } else if from + 2 <= len && work[from] == '|' && work[from + 1] == ' ' {
                 out.push_str(&style::fg("| ", HL_BLUE));
-                i = $from + 2;
-            } else if $from + 2 <= len && $from == 0 && work[$from] == '/' && work[$from + 1] == ' ' {
+                i = from + 2;
+            } else if from + 2 <= len && from == 0 && work[from] == '/' && work[from + 1] == ' ' {
                 out.push_str(&style::fg("/ ", HL_BLUE));
-                i = $from + 2;
+                i = from + 2;
             }
         }};
     }
@@ -1654,6 +1664,16 @@ mod tests {
         let dash = highlight_hyperlist("\t- item", 1);
         assert!(!dash.contains(&style::fg("- ", HL_MAGENTA)), "{:?}", dash);
         assert_eq!(strip_ansi(&dash), "\t- item");
+    }
+
+    /// A qualifier before a property stays green, as in hyperlist.vim; only
+    /// the words up to the colon are red.
+    #[test]
+    fn a_qualifier_before_a_property_stays_green() {
+        let out = highlight_hyperlist("\t[2026-11-27] AcmeCo order 7: send the invoice", 1);
+        assert!(out.contains(&style::fg("[2026-11-27]", HL_GREEN)), "{:?}", out);
+        assert!(out.contains(&style::fg(" AcmeCo order 7: ", HL_RED)), "{:?}", out);
+        assert_eq!(strip_ansi(&out), "\t[2026-11-27] AcmeCo order 7: send the invoice");
     }
 
     fn strip_ansi(s: &str) -> String {
