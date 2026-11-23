@@ -457,6 +457,14 @@ fn emit_hl_line(out: &mut String, line: &str) {
                 out.push_str(&style::fg(&q, HL_GREEN));
                 from += e + 1;
                 i = from;
+                // Spaces between two brackets, as in "[O] [2026-11-27] Name: x".
+                let mut k = from;
+                while k < len && work[k] == ' ' { k += 1; }
+                if k > from && k < len && work[k] == '[' {
+                    out.extend(&work[from..k]);
+                    from = k;
+                    i = from;
+                }
             }
             // End of this segment is the next `;` or end-of-line.
             let mut seg_end = from;
@@ -1674,6 +1682,11 @@ mod tests {
         assert!(out.contains(&style::fg("[2026-11-27]", HL_GREEN)), "{:?}", out);
         assert!(out.contains(&style::fg(" AcmeCo order 7: ", HL_RED)), "{:?}", out);
         assert_eq!(strip_ansi(&out), "\t[2026-11-27] AcmeCo order 7: send the invoice");
+        let out = highlight_hyperlist("\t[O] [2026-11-27] AcmeCo order 7: send", 1);
+        assert!(out.contains(&style::fg("[O]", HL_GREEN)), "{:?}", out);
+        assert!(out.contains(&style::fg("[2026-11-27]", HL_GREEN)), "{:?}", out);
+        assert!(out.contains(&style::fg(" AcmeCo order 7: ", HL_RED)), "{:?}", out);
+        assert_eq!(strip_ansi(&out), "\t[O] [2026-11-27] AcmeCo order 7: send");
     }
 
     fn strip_ansi(s: &str) -> String {
